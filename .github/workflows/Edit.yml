@@ -1,0 +1,181 @@
+name:  Edit 
+on:
+  workflow_dispatch:
+ # schedule:
+ #   - cron: "30 * * * *"
+  
+jobs:
+  Fork-FLITER-list:
+    runs-on: ubuntu-latest
+    env:
+      TZ: 'Asia/Shanghai'
+    
+    steps: 
+    - name: Checkout target repository
+      uses: actions/checkout@v4.1.0
+      with:
+        repository: axtyet/OmniAura
+        path: OmniAura-repo
+
+######
+
+
+      # 修改脚本链接
+    - name: Edit Chxm1023/Rewrite
+      run: |
+        cd OmniAura-repo/repository/chxm1023/Rewrite
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/chxm1023\/Rewrite/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/chxm1023\/Rewrite/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+      # 修改脚本链接
+    - name: Edit Rewrite/Revenuecat
+      run: |
+        cd OmniAura-repo/repository/chxm1023/Rewrite/Revenuecat
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/chxm1023\/Rewrite\/Revenuecat/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/chxm1023\/Rewrite\/Revenuecat/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+      # 修改脚本链接
+    - name: Edit Rewrite/iTunes
+      run: |
+        cd OmniAura-repo/repository/chxm1023/Rewrite/iTunes
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/chxm1023\/Rewrite\/iTunes/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/chxm1023\/Rewrite\/iTunes/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 修改脚本链接
+    - name: Edit Advertising
+      run: |
+        cd OmniAura-repo/repository/chxm1023/Advertising
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/chxm1023\/Advertising/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/chxm1023\/Advertising/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 修改脚本链接
+    - name: Edit QuantumultX/yqc007
+      run: |
+        cd OmniAura-repo/repository/yqc007
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/yqc007/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/yqc007/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 修改脚本链接
+    - name: Edit KeLee/QuantumultX
+      run: |
+        cd OmniAura-repo/repository/KeLee/Tool/QuantumultX/Rewrite
+        for file in *.snippet; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/KeLee\/Resource\/Script/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/KeLee\/Resource\/Script/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+      # 修改脚本链接
+    - name: Edit KeLee/Loon
+      run: |
+        cd OmniAura-repo/repository/KeLee/Tool/Loon/Plugin
+        for file in *.plugin; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/KeLee\/Resource\/Script/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/KeLee\/Resource\/Script/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 修改脚本链接
+    - name: Edit Guding88/Script
+      run: |
+        cd OmniAura-repo/repository/Guding88/Script
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/rraw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/Guding88\/Script/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/Guding88\/Script/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+     
+      # 修改脚本链接
+    - name: Edit Fokit/scripts
+      run: |
+        cd OmniAura-repo/repository/Fokit/scripts
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/rraw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/Fokit\/scripts/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/Fokit\/scripts/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 修改脚本链接
+    - name: Edit ddgksf2013/Scripts
+      run: |
+        cd OmniAura-repo/repository/ddgksf2013/Scripts
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/ddgksf2013\/Scripts/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/ddgksf2013\/Scripts/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+     
+      # 修改脚本链接
+    - name: Edit ddgksf2013/MOYU
+      run: |
+        cd OmniAura-repo/repository/ddgksf2013/MOYU
+        for file in *.js; do
+            if [ "$file" ] ; then
+              # 修改脚本链接
+              sed -i 's/raw.githubusercontent\.com\/axtyet\/Voyagers\/main\/repository\/ddgksf2013\/MOYU/raw.githubusercontent\.com\/axtyet\/OmniAura\/main\/repository\/ddgksf2013\/MOYU/g' "$file"
+            else
+              echo "$file not found."
+            fi
+          done
+
+      # 保存、推送   
+    - name: Add and Commits
+      run: |
+        cd OmniAura-repo
+         if [[ -n $(git status -s) ]]; then
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add --all
+          git commit -m "$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M')"
+          git push origin HEAD
+        else
+          echo "No changes to commit."
+        fi
+
+    - name: Cleanup Workflow
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2

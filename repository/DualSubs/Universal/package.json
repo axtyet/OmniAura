@@ -1,0 +1,32 @@
+{
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/DualSubs/Universal.git"
+	},
+	"directories": {
+		"example": "example"
+	},
+	"scripts": {
+		"build": "rollup -c",
+		"test": "rollup --config --configDebug"
+	},
+	"browserslist": [
+		"iOS >= 15"
+	],
+	"keywords": [],
+	"author": "VirgilClyne",
+	"license": "Apache-2.0",
+	"devDependencies": {
+		"@protobuf-ts/plugin": "^2.9.4",
+		"@rollup/plugin-commonjs": "^25.0.7",
+		"@rollup/plugin-json": "^6.1.0",
+		"@rollup/plugin-node-resolve": "^15.2.3",
+		"@rollup/plugin-terser": "^0.4.4",
+		"crypto-js": "^4.2.0",
+		"rollup": "^4.9.6"
+	},
+	"dependencies": {
+		"@protobuf-ts/runtime": "^2.9.3"
+	}
+}
