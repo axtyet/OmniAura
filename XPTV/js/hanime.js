@@ -16,32 +16,44 @@ async function getConfig() {
 }
 
 async function getTabs() {
-    const { data } = await $fetch.get(appConfig.site, { headers: { 'User-Agent': UA } })
-    const $ = cheerio.load(data)
-    
-    if ($('title').text().includes('Just a moment')) {
-        $utils.openSafari(appConfig.site, UA)
-        return []
+    let list = []
+    let ignore = ['新番預告', 'H漫畫', '無碼黃油'] 
+    function isIgnoreClassName(className) {
+        return ignore.some((element) => className.includes(element))
     }
-    
-    const list = []
-    $('#main-nav-home > a.nav-item').each((i, e) => {
-        const name = $(e).text().trim()
-        let href = $(e).attr('href')
-        
-        if (name.includes('新番預告') || name.includes('H漫畫') || name.includes('無碼黃油')) return
-        
-        if (href && href.startsWith('/')) {
-            href = 'https://hanime1.me' + href
+
+    const { data } = await $fetch.get(appConfig.site, {
+        headers: {
+            'User-Agent': UA,
+        },
+    })
+    const $ = cheerio.load(data)
+    const t1 = $('title').text()
+      if (t1 === 'Just a moment...') {
+    $utils.openSafari(appConfig.site, UA)
+      }
+    let allClass = $('#main-nav-home > a.nav-item')
+
+    allClass.each((i, e) => {
+        const name = $(e).text()
+        const href = $(e).attr('href')
+        const isIgnore = isIgnoreClassName(name)
+        if (isIgnore) return
+
+        let ui = 1
+        if (name.includes('裏番') || name.includes('泡麵番')) {
+            ui = 0 
         }
-        
+
         list.push({
             name,
-            ui: name.includes('裏番') || name.includes('泡麵番') ? 0 : 1,
-            ext: { url: href }
+            ui: ui,
+            ext: {
+                url: encodeURI(href),
+            },
         })
     })
-    
+
     return list
 }
 async function getCards(ext) {
@@ -61,51 +73,115 @@ async function getCards(ext) {
 
     const $ = cheerio.load(data)
     const t1 = $('title').text()
-      if (t1 === 'Just a moment...') {
-    $utils.openSafari(appConfig.site, UA)
-           return []
-      }
-    let videolist = $('.home-rows-videos-wrapper > a')
-    if (videolist.length === 0) videolist = $('.content-padding-new > .row > .search-doujin-videos.col-xs-6')
+    if (t1 === 'Just a moment...') {
+        $utils.openSafari(appConfig.site, UA)
+    }
+    
+    let videoContainers = $('.video-item-container')
+    if (videoContainers.length === 0) {
+        videoContainers = $('.home-rows-videos-wrapper > a, .content-padding-new > .row > .search-doujin-videos.col-xs-6')
+    }
 
-    videolist.each((_, element) => {
-    const href = $(element).attr('href') || $(element).find('.overlay').attr('href')
-    
-    if (href && href.includes('://')) {
-        const domainMatch = href.match(/https?:\/\/([^\/]+)/)
-        if (domainMatch) {
-            const domain = domainMatch[1]
-            if (domain !== 'hanime1.me' && !domain.endsWith('.hanime1.me')) {
-                return 
+    videoContainers.each((_, element) => {
+        let href, title, cover
+        
+        if ($(element).hasClass('video-item-container')) {
+            const videoLink = $(element).find('.video-link')
+            href = videoLink.attr('href')
+            title = $(element).find('.title').text().trim()
+            cover = $(element).find('.main-thumb').attr('src')
+            
+            const stats = {
+                likes: '',
+                views: '',
+                subtitle: ''
             }
+            
+            $(element).find('.stat-item').each((i, statEl) => {
+                const text = $(statEl).text().trim()
+                if (i === 0) {
+                    stats.likes = text.replace('thumb_up', '').trim()
+                } else if (i === 1) {
+                    stats.views = text
+                }
+            })
+            
+            stats.subtitle = $(element).find('.subtitle a').text().trim()
+            const duration = $(element).find('.duration').text().trim()
+            
+            const remarks = []
+            if (stats.likes) remarks.push(stats.likes)
+            if (stats.views) remarks.push(stats.views)
+            
+            if (href && href.includes('://')) {
+                const domainMatch = href.match(/https?:\/\/([^\/]+)/)
+                if (domainMatch) {
+                    const domain = domainMatch[1]
+                    if (domain !== 'hanime1.me' && !domain.endsWith('.hanime1.me')) {
+                        return 
+                    }
+                }
+            }
+            
+            let finalHref = href
+            if (href && href.startsWith('/')) {
+                finalHref = `https://hanime1.me${href}`
+            }
+            
+            cards.push({
+                vod_id: finalHref,
+                vod_name: title,
+                vod_pic: cover,
+                vod_duration: duration,
+                vod_remarks: remarks.join(' · '),
+                ext: {
+                    url: finalHref,
+                    duration: duration,
+                    subtitle: stats.subtitle,
+                    stats: stats
+                },
+            })
+        } else {
+            href = $(element).attr('href') || $(element).find('.overlay').attr('href')
+            
+            if (href && href.includes('://')) {
+                const domainMatch = href.match(/https?:\/\/([^\/]+)/)
+                if (domainMatch) {
+                    const domain = domainMatch[1]
+                    if (domain !== 'hanime1.me' && !domain.endsWith('.hanime1.me')) {
+                        return 
+                    }
+                }
+            }
+            
+            title = $(element).find('.home-rows-videos-title').text() || $(element).find('.card-mobile-title').text()
+            cover = $(element).find('img').attr('src')
+            if (cover && cover.includes('background')) {
+                cover = $(element).find('img').eq(1).attr('src')
+            }
+            
+            let finalHref = href
+            if (href && href.startsWith('/')) {
+                finalHref = `https://hanime1.me${href}`
+            }
+            
+            cards.push({
+                vod_id: finalHref,
+                vod_name: title,
+                vod_pic: cover,
+                vod_duration: '',
+                vod_remarks: '',
+                ext: {
+                    url: finalHref,
+                },
+            })
         }
-    }
-    
-    const title = $(element).find('.home-rows-videos-title').text() || $(element).find('.card-mobile-title').text()
-    let cover = $(element).find('img').attr('src')
-    if (cover && cover.includes('background')) cover = $(element).find('img').eq(1).attr('src')
-    
-    let finalHref = href
-    if (href && href.startsWith('/')) {
-        finalHref = `https://hanime1.me${href}`
-    }
-    
-    cards.push({
-        vod_id: finalHref,
-        vod_name: title,
-        vod_pic: cover,
-        vod_remarks: '',
-        ext: {
-            url: finalHref,
-        },
     })
-})
 
     return jsonify({
         list: cards,
     })
 }
-
 async function getTracks(ext) {
     ext = argsify(ext)
     let tracks = []
@@ -217,33 +293,60 @@ async function search(ext) {
     })
     const $ = cheerio.load(data)
 
-    $('.col-xs-6').each((_, element) => {
-        const href = $(element).find('.overlay').attr('href')
+    $('.video-item-container').each((_, element) => {
+        const videoLink = $(element).find('.video-link')
+        const href = videoLink.attr('href')
+        
         if (href && href.includes('://')) {
-        const domainMatch = href.match(/https?:\/\/([^\/]+)/)
-        if (domainMatch) {
-            const domain = domainMatch[1]
-
-            if (domain !== 'hanime1.me' && !domain.endsWith('.hanime1.me')) {
-                return 
+            const domainMatch = href.match(/https?:\/\/([^\/]+)/)
+            if (domainMatch) {
+                const domain = domainMatch[1]
+                if (domain !== 'hanime1.me' && !domain.endsWith('.hanime1.me')) {
+                    return 
+                }
             }
         }
-    }
-        const title = $(element).find('.card-mobile-title').text()
-        const cover = $(element).find('img').eq(1).attr('src')
+        
+        const title = $(element).find('.title').text().trim()
+        const cover = $(element).find('.main-thumb').attr('src')
+        const subtitle = $(element).find('.subtitle a').text().trim()
+        const duration = $(element).find('.duration').text().trim()
+        
+        const stats = {
+            likes: '',
+            views: ''
+        }
+        
+        $(element).find('.stat-item').each((i, statEl) => {
+            const text = $(statEl).text().trim()
+            if (i === 0) {
+                stats.likes = text.replace('thumb_up', '').trim()
+            } else if (i === 1) {
+                stats.views = text
+            }
+        })
+        
         let finalHref = href
-    if (href && href.startsWith('/')) {
-        finalHref = `https://hanime1.me${href}`
-    }
-    
+        if (href && href.startsWith('/')) {
+            finalHref = `https://hanime1.me${href}`
+        }
+        
+        const remarks = []
+        if (stats.likes) remarks.push(stats.likes)
+        if (stats.views) remarks.push(stats.views)
+        
         cards.push({
+            ui: 1,
             vod_id: finalHref,
             vod_name: title,
             vod_pic: cover,
-            vod_remarks: '',
-            ui: 1,
+            vod_duration: duration,
+            vod_remarks: remarks.join(' · '),
             ext: {
                 url: finalHref,
+                duration: duration,
+                subtitle: subtitle,
+                stats: stats
             },
         })
     })
