@@ -2785,7 +2785,28 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\r
             color: white;\r
             padding: 30px;\r
+            padding-top: 20px;\r
             text-align: center;\r
+            position: relative;\r
+        }\r
+\r
+        .back-link {\r
+            position: absolute;\r
+            left: 20px;\r
+            top: 50%;\r
+            transform: translateY(-50%);\r
+            color: white;\r
+            text-decoration: none;\r
+            font-size: 14px;\r
+            display: flex;\r
+            align-items: center;\r
+            gap: 4px;\r
+            opacity: 0.9;\r
+            transition: opacity 0.2s;\r
+        }\r
+\r
+        .back-link:hover {\r
+            opacity: 1;\r
         }\r
 \r
         .header h1 {\r
@@ -3090,6 +3111,29 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
                 width: 100%;\r
                 margin: 2px 0;\r
             }\r
+\r
+            /* \u8FD4\u56DE\u94FE\u63A5\u79FB\u52A8\u7AEF\u9002\u914D */\r
+            .back-link {\r
+                position: static;\r
+                transform: none;\r
+                margin-bottom: 10px;\r
+                align-self: flex-start;\r
+            }\r
+\r
+            .header {\r
+                padding: 20px 15px;\r
+                display: flex;\r
+                flex-direction: column;\r
+                align-items: center;\r
+            }\r
+\r
+            .header h1 {\r
+                font-size: 24px;\r
+            }\r
+\r
+            .header p {\r
+                font-size: 12px;\r
+            }\r
         }\r
 \r
         /* \u786E\u4FDD\u6309\u94AE\u53EF\u89C1 */\r
@@ -3121,6 +3165,7 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
 <body>\r
     <div class="container">\r
         <div class="header">\r
+            <a href="/website/" class="back-link">\u2190 \u8FD4\u56DE\u9996\u9875</a>\r
             <h1>\u{1F310} CMS \u91C7\u96C6\u6E90\u914D\u7F6E</h1>\r
             <p>\u914D\u7F6E\u548C\u7BA1\u7406 CMS \u91C7\u96C6\u6E90,\u6BCF\u4E2A\u6E90\u5C06\u4F5C\u4E3A\u72EC\u7ACB\u7684 Spider \u6CE8\u518C</p>\r
         </div>\r
@@ -4235,24 +4280,7 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
             </div>\r
         </div>\r
 \r
-        <!-- \u5F53\u524D\u76EE\u5F55 -->\r
-        <div class="section">\r
-            <div class="section-header">\r
-                <div class="section-title-wrapper">\r
-                    <div class="section-title">\u5F53\u524D\u76EE\u5F55</div>\r
-                    <span class="section-path" id="current-dir">\u5F53\u524D\u5DE5\u4F5C\u76EE\u5F55</span>\r
-                </div>\r
-                <button class="scan-button" data-type="current">\r
-                    \u626B\u63CF\r
-                </button>\r
-            </div>\r
-            <div id="current-files">\r
-                <div class="empty-state">\r
-                    <div class="empty-icon">\u{1F4C1}</div>\r
-                    <div class="empty-text">\u70B9\u51FB\u626B\u63CF\u6309\u94AE\u67E5\u770B\u6587\u4EF6</div>\r
-                </div>\r
-            </div>\r
-        </div>\r
+        <!-- \u5F53\u524D\u76EE\u5F55\u626B\u63CF\u529F\u80FD\u5DF2\u79FB\u9664 -->\r
     </div>\r
 \r
     <div id="toast" class="toast"></div>\r
@@ -4272,7 +4300,6 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
                         currentDbFile = result.data.currentDbFile;\r
                         document.getElementById('nodepath-dir').textContent = result.data.nodePath || '\u672A\u8BBE\u7F6E';\r
                         document.getElementById('documents-dir').textContent = result.data.documentsPath;\r
-                        document.getElementById('current-dir').textContent = result.data.currentPath;\r
                     }\r
                 } catch (error) {\r
                     console.error('\u83B7\u53D6\u6570\u636E\u5E93\u4FE1\u606F\u5931\u8D25:', error);\r
@@ -4295,7 +4322,7 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
                     const result = await response.json();\r
 \r
                     if (result.code === 0) {\r
-                        displayFiles(type, result.data.files, result.data.isSameAsCurrent, result.data.isSameAsNodePath);\r
+                        displayFiles(type, result.data.files, result.data.isSameAsNodePath);\r
                     } else {\r
                         showToast(result.message || '\u626B\u63CF\u5931\u8D25', 'error');\r
                         container.innerHTML = \`\r
@@ -4368,7 +4395,7 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
             }\r
 \r
             // \u663E\u793A\u6587\u4EF6\u5217\u8868\r
-            function displayFiles(type, files, isSameAsCurrent = false, isSameAsNodePath = false) {\r
+            function displayFiles(type, files, isSameAsNodePath = false) {\r
                 const container = document.getElementById(\`\${type}-files\`);\r
 \r
                 if (!files || files.length === 0) {\r
@@ -4376,14 +4403,12 @@ ${ae}`),X.destroy(z)}function W(z,X){z.headers["accept-version"]!==void 0&&(z.he
                         <div class="empty-state">\r
                             <div class="empty-icon">\u{1F4ED}</div>\r
                             <div class="empty-text">\u672A\u627E\u5230\u6587\u4EF6</div>\r
-                            \${isSameAsNodePath && type === 'current' ? '<div class="empty-text" style="margin-top: 8px; font-size: 13px; color: #667eea;">\u2139\uFE0F \u6B64\u76EE\u5F55\u4E0ENODE_PATH\u76F8\u540C</div>' : ''}\r
                         </div>\r
                     \`;\r
                     return;\r
                 }\r
 \r
                 container.innerHTML = \`\r
-                    \${isSameAsNodePath && type === 'current' ? '<div style="padding: 12px; background: rgba(102, 126, 234, 0.1); border-radius: 8px; margin-bottom: 12px; font-size: 13px; color: #667eea;">\u2139\uFE0F \u6B64\u76EE\u5F55\u4E0ENODE_PATH\u76F8\u540C</div>' : ''}\r
                     <div class="file-list">\r
                         \${files.map(file => generateFileItemHTML(file, type)).join('')}\r
                     </div>\r
