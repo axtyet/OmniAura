@@ -1,4 +1,4 @@
-// cf-clearance.js v1.0.0
+// cf-clearance.js
 // Cloudflare Clearance 绕过脚本 for Loon
 // 配套插件：cf-bypass.plugin
 //
@@ -8,10 +8,12 @@
 // - http-response 检测分支：响应命中 challenge → 清缓存 + 通知用户重新过盾
 
 var CF = {};
-CF.VERSION = '1.0.0';
 
 CF.CONFIG = {
   STORE_PREFIX: 'cf_clearance_',
+  INPUT_DOMAINS: 'domains',
+  // 内置默认域名列表（#!input domains 为空时使用，用户可通过插件 UI 覆盖）
+  DEFAULT_DOMAINS: 'missav.live,jable.tv,51cg1.com,hanime1.me,m.pandalive.co.kr,zh.spankbang.com,api.pandalive.co.kr,noodlemagazine.com',
   // challenge 检测：状态码（必要条件之一）
   CHALLENGE_STATUS: [403, 503],
   // challenge 检测：body 特征（任一命中即满足特征条件）
@@ -24,18 +26,6 @@ CF.CONFIG = {
   CHALLENGE_HEADER_KEY: 'cf-mitigated',
   CHALLENGE_HEADER_VALUE: 'challenge',
   NOTIFY_TITLE: 'CF 盾',
-  // Safari 导航请求标准 header（注入分支强制覆盖，伪装成浏览器避免指纹检测）。
-  // 值取自真实 Safari 导航抓包；iOS/Safari 升级后可能需更新。
-  SAFARI_NAV_HEADERS: {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br, zstd',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Priority': 'u=0, i'
-  },
   // UA 兜底（$loon 取不到系统版本时）
   FALLBACK_UA_VERSION: '17_0',
   FALLBACK_UA_VERSION_DOTTED: '17.0'
@@ -62,17 +52,31 @@ CF.shallowCopy = function (obj) {
   return copy;
 };
 
-// ============ host 解析 / 归一化 ============
+// ============ 多站点解析 ============
 
-// 轻量 eTLD+1 归一化：取 host 最后两段作存储主域（无外部依赖、无配置）。
-// 如 www.example.com → example.com；example.com → example.com。
-// 对二级后缀（example.co.uk）会误判，但覆盖绝大多数常见站点。
-// host 无点或只剩一段时原样返回（localhost / 内网名）。
-CF.registrableDomain = function (host) {
-  if (!host) return '';
-  var parts = host.split('.');
-  if (parts.length <= 2) return host;
-  return parts.slice(-2).join('.');
+// 解析 #!input domains（逗号分隔主域）为去空去重的数组
+CF.parseDomains = function (raw) {
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0; });
+};
+
+// 从请求 host 找出命中的清单主域；返回清单项本身（用于归一化存储 key）。
+// 匹配规则：host === domain，或 host 以 "." + domain 结尾（严格后缀，防前缀混淆）。
+CF.extractRegistrableDomain = function (host, domains) {
+  if (!host || !domains || domains.length === 0) return null;
+  for (var i = 0; i < domains.length; i++) {
+    var d = domains[i];
+    if (host === d) return d;
+    if (host.length > d.length + 1 &&
+        host.charAt(host.length - d.length - 1) === '.' &&
+        host.slice(host.length - d.length) === d) {
+      return d;
+    }
+  }
+  return null;
 };
 
 // 从 URL 提取 host（去掉端口）。要求带协议头（://）；否则视为非法返回空串。
@@ -190,7 +194,7 @@ CF.notify = function (subtitle, content, attach) {
 
 // ============ 请求分支：学习 + 注入 ============
 
-// domain 为归一化主域（eTLD+1），存储 key 基于它。
+// domain 为归一化主域（来自清单匹配），存储 key 基于它。
 CF.handleRequest = function (domain) {
   var req = $request;
   var headers = (req && req.headers) || {};
@@ -206,8 +210,7 @@ CF.handleRequest = function (domain) {
     if (!prev || prev.cf_clearance !== existing) {
       CF.saveCookie(domain, {
         cf_clearance: existing,
-        cookies: cookieHeader,   // 完整 Cookie 头，注入时全量复用
-        ua: uaHeader,            // ground truth：过盾请求的实际 UA
+        ua: uaHeader,           // ground truth：过盾请求的实际 UA
         savedAt: Date.now(),
         domain: domain
       });
@@ -222,10 +225,10 @@ CF.handleRequest = function (domain) {
   }
 
   // ---- 注入分支：无 cf_clearance，用缓存覆盖请求头 ----
-  // 全量覆盖 Cookie 头为存储的 cookies 串（含 cf_clearance + 其他 cookie），
-  // UA 用存储的 Safari UA 覆盖。原理：cf_clearance 绑定「过盾时的 UA + IP」，
-  // Loon 重写整个请求头让 CF 看到 Safari 身份从而放行；其余 cookie 一并复用，
-  // 让第三方 App 拿到过盾时的完整身份。
+  // 一律用存储的 Safari UA + cf_clearance 覆盖，不校验 App 原始 UA。
+  // 原理：cf_clearance 绑定「过盾时的 UA + IP」。Loon 拦截请求后重写
+  // 整个请求头（UA + Cookie），让 CF 看到的是 Safari 身份，从而放行。
+  // 适用于「第三方 App 访问」场景（App 自身 UA 与 Safari 不同）。
   var cached = CF.loadCookie(domain);
   if (!cached || !cached.cf_clearance) {
     // 首次访问引导：该域无缓存 token，提示用户 Safari 手动过盾（仅一次，免重复打扰）
@@ -240,29 +243,17 @@ CF.handleRequest = function (domain) {
     return;
   }
 
-  // 全量覆盖 Cookie 头 + 强制伪装 Safari 导航 header，消除 App 请求头指纹矛盾
+  // 合并 Cookie 并用存储的 Safari UA 覆盖 App 的 UA
+  var merged = CF.mergeClearance(cookieHeader, cached.cf_clearance);
   var newHeaders = CF.shallowCopy(headers);
-  newHeaders['Cookie'] = cached.cookies || ('cf_clearance=' + cached.cf_clearance);
+  newHeaders['Cookie'] = merged;
   newHeaders['User-Agent'] = cached.ua || uaHeader;
-  // 强制覆盖 Safari 导航标准 header（App 原带的 HTTP 库特征会暴露指纹）
-  var navHeaders = CF.CONFIG.SAFARI_NAV_HEADERS;
-  var navKeys = Object.keys(navHeaders);
-  for (var i = 0; i < navKeys.length; i++) {
-    newHeaders[navKeys[i]] = navHeaders[navKeys[i]];
-  }
-  // 删除 Content-Length（GET 导航请求不该有；大小写不敏感）
-  var ck = Object.keys(newHeaders);
-  for (var j = 0; j < ck.length; j++) {
-    if (ck[j].toLowerCase() === 'content-length') delete newHeaders[ck[j]];
-  }
   $done({ headers: newHeaders });
 };
 
 // ============ 响应分支：失效检测 ============
 
 // 命中则清该域缓存 + 通知 + 放行原响应。
-// domain 可为清单归一化主域，也可为非清单域名的原始 host（响应阶段对任意
-// 被触发的域名都做检测）；clearCookie 对无缓存域名为 no-op，安全。
 // 刻意不伪造响应，让 Safari 显示盾页以便用户当场过盾。
 CF.handleResponse = function (domain) {
   // Loon 的 $response.status 可能是数字、字符串，甚至 "403 Forbidden" 完整状态行
@@ -281,26 +272,32 @@ CF.handleResponse = function (domain) {
 
 // ============ 入口分发 ============
 
-// 从 $request.url 取 host，归一化为 eTLD+1 主域作存储 key。
-// 分阶段分流：
-// - 请求阶段（无 $response）：学习（带 cf_clearance → 入库）或注入（无 → 覆盖请求头）
-// - 响应阶段（有 $response）：任意被触发的域名都做 challenge 检测，403/503 必通知
-// 域名是否触发脚本由 cf-bypass.plugin 的 [Script] 正则 + [mitm] hostname 决定，
-// 脚本对所有被触发的域名生效，无需内置域名清单。
+// 读 #!input domains；为空时使用 CF.CONFIG.DEFAULT_DOMAINS 内置列表。
+// 从 $request.url 取 host 匹配；不命中则透传。
+// 命中且无 $response → 走 request 分支；有 $response → 走 response 分支。
 CF.dispatch = function () {
   try {
+    var domainsRaw = '';
+    try { domainsRaw = $persistentStore.read(CF.CONFIG.INPUT_DOMAINS); } catch (e) {}
+    if (!domainsRaw) {
+      domainsRaw = CF.CONFIG.DEFAULT_DOMAINS;
+    }
+    var domains = CF.parseDomains(domainsRaw);
+
     if (typeof $request === 'undefined' || !$request || !$request.url) {
       $done({});
       return;
     }
     var host = CF.hostFromUrl($request.url);
-    if (!host) { $done({}); return; }
-    var domain = CF.registrableDomain(host);  // 归一化主域，用于存储 key
-
+    var matched = CF.extractRegistrableDomain(host, domains);
+    if (!matched) {
+      $done({});
+      return;
+    }
     if (typeof $response === 'undefined' || !$response) {
-      CF.handleRequest(domain);
+      CF.handleRequest(matched);
     } else {
-      CF.handleResponse(domain);
+      CF.handleResponse(matched);
     }
   } catch (e) {
     CF.notify('插件异常', String(e && e.message || e));
@@ -341,11 +338,11 @@ CF.selfTest = function () {
   check('extractClearance 未命中', function () {
     CF_assert(CF.extractClearance('a=1; b=2') === null);
   });
-  check('registrableDomain 子域归一', function () {
-    CF_assert(CF.registrableDomain('www.example.com') === 'example.com');
+  check('extractRegistrableDomain 子域命中', function () {
+    CF_assert(CF.extractRegistrableDomain('www.example.com', ['example.com']) === 'example.com');
   });
-  check('registrableDomain 根域不变', function () {
-    CF_assert(CF.registrableDomain('example.com') === 'example.com');
+  check('extractRegistrableDomain 防前缀混淆', function () {
+    CF_assert(CF.extractRegistrableDomain('notexample.com', ['example.com']) === null);
   });
   check('mergeClearance 覆盖旧值', function () {
     CF_assert(CF.mergeClearance('cf_clearance=OLD; k=v', 'NEW') === 'k=v; cf_clearance=NEW');
