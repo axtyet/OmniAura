@@ -296,9 +296,8 @@ CF.handleRequest = function (domain) {
 // ============ 响应分支：失效检测 ============
 
 // 命中则（按保护窗口）清该域缓存 + 通知 + 放行原响应。
-// domain 为归一化主域，作存储 key；通知标题与 attach URL 用「触发盾的子域名 host」。
-// attach 必须是干净可打开的子域名根 URL：触发盾的多是带长 query 的深层 API/子资源
-// 请求，用 $request.url 做 attach 会让 Loon 回退显示脚本执行简报。
+// domain 为归一化主域，作存储 key；通知标题显示「触发盾的子域名 host」，
+// attach 跳转到「触发盾的原始请求 URL」，让用户点击即回到该请求当场过盾。
 // 刻意不伪造响应，让 Safari 显示盾页以便用户当场过盾。
 CF.handleResponse = function (domain) {
   // Loon 的 $response.status 可能是数字、字符串，甚至 "403 Forbidden" 完整状态行
@@ -314,9 +313,10 @@ CF.handleResponse = function (domain) {
     if (!fresh) {
       CF.clearCookie(domain);
     }
-    // 跳转目标用触发盾的子域名根（CF 盾常挂在子域上，跳裸主域可能再撞盾）。
+    // 标题显示触发盾的子域名 host；attach 跳转到原始请求 URL（含 path/query/fragment）。
+    // $request.url 缺失（不该发生但防御）时兜底为「https://<host>/」。
     var host = CF.hostFromUrl($request && $request.url) || domain;
-    var openUrl = 'https://' + host + '/';
+    var openUrl = ($request && $request.url) || ('https://' + host + '/');
     CF.notify('CF 盾失效 ' + host,
       '检测到 challenge，点击此处用 Safari 重新过盾，Loon 将自动捕获新 cookie',
       openUrl);
