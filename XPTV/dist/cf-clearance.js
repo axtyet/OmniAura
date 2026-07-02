@@ -1,4 +1,4 @@
-// cf-clearance.js v1.0.0
+// cf-clearance.js v1.0.1
 // Cloudflare Clearance 绕过脚本 for Loon
 // 配套插件：cf-bypass.plugin
 //
@@ -8,7 +8,7 @@
 // - http-response 检测分支：响应命中 challenge → 清缓存 + 通知用户重新过盾
 
 var CF = {};
-CF.VERSION = '1.0.0';
+CF.VERSION = '1.0.1';
 
 CF.CONFIG = {
   STORE_PREFIX: 'cf_clearance_',
@@ -30,7 +30,12 @@ CF.CONFIG = {
   PROTECT_WINDOW: 30000,
   // Safari 导航请求标准 header（注入分支强制覆盖，伪装成浏览器避免指纹检测）。
   // 值取自真实 Safari 导航抓包；iOS/Safari 升级后可能需更新。
-  // 注：不含 Sec-Fetch-User —— 真实 Safari 顶层导航抓包里并不发送该头，
+  // 注：不含 Sec-Fetch-Site —— 它不是「所有导航都固定」的头，而是按请求上下文派生：
+  //   地址栏/新标签页打开 → none（无来源）
+  //   站内翻页/跳转      → same-origin（带 Referer）
+  // 旧实现把它钉死 none，导致翻页「声称无来源却访问分页」被 CF 判异常 → 403。
+  // 现由 CF.deriveSecFetchSite() 按入站 Referer/Origin 在 handleRequest 内派生。
+  // 另不含 Sec-Fetch-User —— 真实 Safari 顶层导航抓包里并不发送该头，
   // 加上反而是伪造指纹的破绽。
   SAFARI_NAV_HEADERS: {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
@@ -40,14 +45,14 @@ CF.CONFIG = {
     'Accept-Encoding': 'gzip, deflate',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
     'Priority': 'u=0, i'
   },
   // 注入分支白名单：仅保留这些请求头，其余 App/HTTP 库特征头一律删除。
   // 真实 Safari 导航请求是「干净」的；App HTTP 库会注入大量非浏览器特征头
   // （Connection: close、Content-Length: 0、Cache-Control、Upgrade-Insecure-Requests、
-  // DNT、Referer、Pragma 等）。仅覆盖无法消除它们，且会产生语义矛盾 —— 典型如
-  // Sec-Fetch-Site: none 却同时带 Referer，浏览器里不可能成立，CF 一眼识破。
+  // DNT、Pragma 等）。仅覆盖无法消除它们，故从空对象起按白名单重建一份干净的头。
+  // 必须保留 Referer/Origin：它们是 Sec-Fetch-Site 的派生依据；丢掉后所有请求
+  // 都退化成 none，翻页便会 403。Sec-Fetch-Site 不进白名单（由派生覆盖，见上）。
   // 大小写不敏感匹配；未列出的头（含未知自定义头）一律丢弃。
   HEADER_WHITELIST: [
     'host',
@@ -56,6 +61,8 @@ CF.CONFIG = {
     'accept',
     'accept-language',
     'accept-encoding',
+    'referer',
+    'origin',
     'sec-fetch-dest',
     'sec-fetch-mode',
     'sec-fetch-site',
@@ -111,6 +118,23 @@ CF.hostFromUrl = function (url) {
   var colon = rest.indexOf(':');
   if (colon >= 0) rest = rest.slice(0, colon);
   return rest.toLowerCase();
+};
+
+// 按 Referer/Origin 派生 Sec-Fetch-Site，对齐真实浏览器行为。
+// 翻页（站内跳转）浏览器发 same-origin + Referer；地址栏/新标签页打开发 none + 无 Referer。
+// 旧实现把 Site 钉死 none 并丢弃 Referer，导致翻页「声称无来源却访问分页」被 CF 判异常 → 403。
+//   - 无 Referer/Origin（地址栏直接打开、App 不带）→ 'none'（保住首页 200 的现有行为）
+//   - 源 host == 目标 host                                → 'same-origin'
+//   - 同 eTLD+1 不同子域                                  → 'same-site'
+//   - 否则                                                → 'cross-site'
+// 优先用 Referer 的 host，其次 Origin（Origin 只含协议+host，无 path，也合法）。
+// 源 host 为空（Referer 值非法/无协议头）→ 'none'。
+CF.deriveSecFetchSite = function (refererHeader, originHeader, targetHost) {
+  var sourceHost = CF.hostFromUrl(refererHeader) || CF.hostFromUrl(originHeader);
+  if (!sourceHost) return 'none';
+  if (sourceHost === targetHost) return 'same-origin';
+  if (CF.registrableDomain(sourceHost) === CF.registrableDomain(targetHost)) return 'same-site';
+  return 'cross-site';
 };
 
 // ============ cf_clearance 提取 / 合并 ============
@@ -268,9 +292,9 @@ CF.handleRequest = function (domain) {
 
   // 白名单重建：只保留浏览器导航该有的头，消除 App/HTTP 库注入的非浏览器特征头。
   // 原生 Safari 导航是「干净」的；App 库会塞入 Connection: close、Content-Length: 0、
-  // Cache-Control、Upgrade-Insecure-Requests、DNT、Referer、Pragma 等。仅覆盖无法删除它们，
-  // 且会产生语义矛盾（Sec-Fetch-Site: none 却带 Referer，浏览器里不可能同时成立，
-  // CF 一眼识破）。故从空对象起，按白名单重建一份干净的 Safari 导航头。
+  // Cache-Control、Upgrade-Insecure-Requests、DNT、Pragma 等。仅覆盖无法删除它们，
+  // 故从空对象起，按白名单重建一份干净的 Safari 导航头。
+  // 白名单刻意保留 Referer/Origin —— 它们是 Sec-Fetch-Site 的派生依据（见下）。
   var newHeaders = {};
   var whitelist = CF.CONFIG.HEADER_WHITELIST;
   var srcKeys = Object.keys(headers);
@@ -290,6 +314,15 @@ CF.handleRequest = function (domain) {
   for (var j = 0; j < navKeys.length; j++) {
     newHeaders[navKeys[j]] = navHeaders[navKeys[j]];
   }
+  // Sec-Fetch-Site 按入站 Referer/Origin 派生，对齐真实浏览器行为：
+  // 翻页（同站跳转）发 same-origin + Referer；地址栏直接打开发 none + 无 Referer。
+  // 旧实现把 Site 钉死 none，导致翻页「声称无来源却访问分页」被 CF 判异常 → 403。
+  var targetHost = CF.hostFromUrl(req.url);
+  newHeaders['Sec-Fetch-Site'] = CF.deriveSecFetchSite(
+    CF.getHeaderCI(newHeaders, 'Referer'),
+    CF.getHeaderCI(newHeaders, 'Origin'),
+    targetHost
+  );
   $done({ headers: newHeaders });
 };
 
