@@ -12,17 +12,9 @@ CF.VERSION = '1.0.1';
 
 CF.CONFIG = {
   STORE_PREFIX: 'cf_clearance_',
-  // challenge 检测：状态码（必要条件之一）
+  // challenge 检测：仅按状态码判定（requires-body=false，无 body 可查特征）。
+  // 目标站的 403/503 直接视为 CF challenge。
   CHALLENGE_STATUS: [403, 503],
-  // challenge 检测：body 特征（任一命中即满足特征条件）
-  CHALLENGE_BODY_MARKERS: [
-    'Just a moment...',
-    '/cdn-cgi/challenge-platform/',
-    '__cf_chl_jschl_tk__',
-    'jschl'
-  ],
-  CHALLENGE_HEADER_KEY: 'cf-mitigated',
-  CHALLENGE_HEADER_VALUE: 'challenge',
   NOTIFY_TITLE: 'CF 盾',
   // challenge 后保护窗口：新 cookie 在该时长内刚入库时，不清缓存。
   // 防止过盾后刚存的新 token 被仍在路上的旧 403 响应反复 clearCookie 清掉，
@@ -37,20 +29,28 @@ CF.CONFIG = {
   // 现由 CF.deriveSecFetchSite() 按入站 Referer/Origin 在 handleRequest 内派生。
   // 另不含 Sec-Fetch-User —— 真实 Safari 顶层导航抓包里并不发送该头，
   // 加上反而是伪造指纹的破绽。
+  // Upgrade-Insecure-Requests 是 Safari 顶层导航必发的头（10.1+/iOS 10.3+）。
+  // 注入分支声称 Sec-Fetch-Mode: navigate，必须带上它，否则「自称导航却缺该头」
+  // 会让 fetch metadata 头集合自相矛盾，反而暴露伪造。
   SAFARI_NAV_HEADERS: {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
     // 注：只用 gzip, deflate。真 Safari 导航虽带 br/zstd，但第三方 App 多只能解 gzip，
     // 覆盖成 br/zstd 会让服务器返回 App 解不开的编码 → 页面乱码。gzip 仍是 Safari 合法值。
     'Accept-Encoding': 'gzip, deflate',
+    'Upgrade-Insecure-Requests': '1',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
-    'Priority': 'u=0, i'
+    // Priority 顶层导航取最高优先级 u=0。不带 i（增量标记）—— 真实 Safari
+    // 主要在 HTTP/3 下发 Priority，H2 下 i 标记并非稳定特征，去掉更稳妥。
+    'Priority': 'u=0'
   },
   // 注入分支白名单：仅保留这些请求头，其余 App/HTTP 库特征头一律删除。
   // 真实 Safari 导航请求是「干净」的；App HTTP 库会注入大量非浏览器特征头
-  // （Connection: close、Content-Length: 0、Cache-Control、Upgrade-Insecure-Requests、
-  // DNT、Pragma 等）。仅覆盖无法消除它们，故从空对象起按白名单重建一份干净的头。
+  // （Connection: close、Content-Length: 0、Cache-Control、DNT、Pragma 等）。仅覆盖
+  // 无法消除它们，故从空对象起按白名单重建一份干净的头。
+  // Upgrade-Insecure-Requests 是 Safari 顶层导航必发的头，进白名单（值由 SAFARI_NAV_HEADERS
+  // 强制为 '1'）。切勿把它当 App 特征头删掉 —— 删除会让 fetch metadata 头集合矛盾。
   // 必须保留 Referer/Origin：它们是 Sec-Fetch-Site 的派生依据；丢掉后所有请求
   // 都退化成 none，翻页便会 403。Sec-Fetch-Site 不进白名单（由派生覆盖，见上）。
   // 大小写不敏感匹配；未列出的头（含未知自定义头）一律丢弃。
@@ -61,6 +61,7 @@ CF.CONFIG = {
     'accept',
     'accept-language',
     'accept-encoding',
+    'upgrade-insecure-requests',
     'referer',
     'origin',
     'sec-fetch-dest',
@@ -118,6 +119,54 @@ CF.hostFromUrl = function (url) {
   var colon = rest.indexOf(':');
   if (colon >= 0) rest = rest.slice(0, colon);
   return rest.toLowerCase();
+};
+
+// 从 URL 提取协议（小写）。如 'https://x.com/p' → 'https'；无协议头返回空串。
+CF.schemeFromUrl = function (url) {
+  if (!url || typeof url !== 'string') return '';
+  var idx = url.indexOf('://');
+  if (idx < 0) return '';
+  return url.slice(0, idx).toLowerCase();
+};
+
+// 提取 URL 的 origin（协议 + host，无端口则原样，无 path/query/fragment）。
+// 输入非法（无协议头）返回空串。仅用于构造 Referer 裁剪后的 origin 值。
+CF.originFromUrl = function (url) {
+  if (!url || typeof url !== 'string') return '';
+  var idx = url.indexOf('://');
+  if (idx < 0) return '';
+  var rest = url.slice(idx + 3);
+  var slash = rest.indexOf('/');
+  if (slash < 0) return url;  // 本就无 path，原样返回
+  return url.slice(0, idx + 3 + slash);
+};
+
+// 按 Safari 默认 Referrer-Policy（strict-origin-when-cross-origin）裁剪 Referer。
+//   同源（同 host）          → 保留完整 URL，仅去 fragment
+//   跨源（含同站不同子域/跨站）→ 只发 origin（协议+host）
+//   降级（https 源 → http 目标）→ 不发（返回空）
+// targetUrl 用于判定同源/降级；非法输入（无协议头的 Referer）原样返回（透传，不强行改）。
+// 返回 [value, send]：send=false 时调用方应删除 Referer 头。
+// 注：fragment（#xxx）在任何情况下都应剥离 —— 真实浏览器从不在 Referer 里带 fragment。
+CF.sanitizeReferer = function (refererValue, targetUrl) {
+  if (!refererValue) return { value: refererValue, send: true };
+  // 先统一去 fragment（fragment 在所有策略下都不发）
+  var hashIdx = refererValue.indexOf('#');
+  var stripped = hashIdx >= 0 ? refererValue.slice(0, hashIdx) : refererValue;
+  var srcScheme = CF.schemeFromUrl(refererValue);
+  // 无协议头（不像合法 URL）→ 无法判定，原样返回（透传，不强行改）
+  if (!srcScheme) return { value: refererValue, send: true };
+  var dstScheme = CF.schemeFromUrl(targetUrl);
+  // 降级：源 https → 目标 http → 不发 Referer（strict-origin-when-cross-origin 的降级规则）
+  if (srcScheme === 'https' && dstScheme === 'http') {
+    return { value: '', send: false };
+  }
+  var srcHost = CF.hostFromUrl(refererValue);
+  var dstHost = CF.hostFromUrl(targetUrl);
+  // 同源 → 保留完整 URL（已去 fragment）
+  if (srcHost && srcHost === dstHost) return { value: stripped, send: true };
+  // 跨源 → 只发 origin
+  return { value: CF.originFromUrl(refererValue), send: true };
 };
 
 // 按 Referer/Origin 派生 Sec-Fetch-Site，对齐真实浏览器行为。
@@ -323,6 +372,30 @@ CF.handleRequest = function (domain) {
     CF.getHeaderCI(newHeaders, 'Origin'),
     targetHost
   );
+  // Referer 策略裁剪（对齐 Safari 默认 strict-origin-when-cross-origin）：
+  // 直接透传 App 传入的完整跨源 URL 会暴露「不像 Safari」—— 真实浏览器跨源只发 origin。
+  //   同源 → 保留完整 URL（去 fragment）
+  //   跨源 → 裁到 origin
+  //   降级（https→http）→ 删除 Referer 头
+  // Sec-Fetch-Site 用裁剪前的原始 Referer 派生（它判定的是「源 host」，裁剪不影响）。
+  var refKey = null;
+  var refVal = '';
+  var allKeys = Object.keys(newHeaders);
+  for (var ri = 0; ri < allKeys.length; ri++) {
+    if (allKeys[ri].toLowerCase() === 'referer') {
+      refKey = allKeys[ri];
+      refVal = newHeaders[refKey];
+      break;
+    }
+  }
+  if (refKey !== null) {
+    var sanitized = CF.sanitizeReferer(refVal, req.url);
+    if (sanitized.send) {
+      newHeaders[refKey] = sanitized.value;
+    } else {
+      delete newHeaders[refKey];  // 降级：不发 Referer
+    }
+  }
   $done({ headers: newHeaders });
 };
 
