@@ -1,4 +1,4 @@
-// cf-clearance.js v1.0.1
+// cf-clearance.js v1.1.0
 // Cloudflare Clearance 绕过脚本 for Loon
 // 配套插件：cf-bypass.plugin
 //
@@ -8,7 +8,7 @@
 // - http-response 检测分支：响应命中 challenge → 清缓存 + 通知用户重新过盾
 
 var CF = {};
-CF.VERSION = '1.0.1';
+CF.VERSION = '1.1.0';
 
 CF.CONFIG = {
   STORE_PREFIX: 'cf_clearance_',
@@ -41,19 +41,54 @@ CF.CONFIG = {
     'Upgrade-Insecure-Requests': '1',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
+    // Connection: keep-alive 是 Safari 在 HTTP/1.1 下的固定头。
+    // （HTTP/2 客户端禁止发 Connection，但 Loon 在 H2 下会自剥离，故带上无害。）
+    'Connection': 'keep-alive',
     // Priority 顶层导航取最高优先级 u=0。不带 i（增量标记）—— 真实 Safari
     // 主要在 HTTP/3 下发 Priority，H2 下 i 标记并非稳定特征，去掉更稳妥。
     'Priority': 'u=0'
   },
+  // Safari 导航请求的 canonical 头顺序（按真实 Safari 抓包）。
+  // JA4_H / HTTP2 指纹会校验 header 的原始顺序：dict 传头时 Host 易跑到末尾、
+  // Sec-Fetch-* 散落开头，是脚本特征。注入分支在末尾按此顺序重排 newHeaders，
+  // 让 Loon 看到的对象顺序对齐 Safari。
+  // 未列出的头按原插入顺序追加到末尾（保守保留，不丢头）。
+  HEADER_ORDER: [
+    'Host',
+    'Accept',
+    'Upgrade-Insecure-Requests',
+    'User-Agent',
+    'Accept-Language',
+    'Accept-Encoding',
+    'Connection',
+    'Cookie',
+    'Sec-Fetch-Dest',
+    'Sec-Fetch-Mode',
+    'Sec-Fetch-Site',
+    'Priority',
+    'Referer',
+    'Origin'
+  ],
+  // Cookie 黑名单：注入前从 Cookie 串剔除这些 name（小写匹配）。
+  // _ym_isad：Yandex Metrica 标记，_ym_isad=1 表示前端 JS 已判定为 bot/非交互流量。
+  // 清掉它们不影响过盾（CF 只认 cf_clearance），反而让身份更「干净」。
+  COOKIE_BLACKLIST: ['_ym_isad'],
+  // Cookie 前缀黑名单：name 以这些前缀开头就剔除（小写匹配）。
+  // Yandex Metrica 的 _ym_*（_ym_uid/_ym_visiac/_ym_d/_ym_fa/...）会随时间扩容，
+  // 用前缀覆盖整个家族比逐个列举更稳，避免漏掉新出现的 _ym_xx 标记。
+  COOKIE_PREFIX_BLACKLIST: ['_ym_'],
   // 注入分支白名单：仅保留这些请求头，其余 App/HTTP 库特征头一律删除。
   // 真实 Safari 导航请求是「干净」的；App HTTP 库会注入大量非浏览器特征头
-  // （Connection: close、Content-Length: 0、Cache-Control、DNT、Pragma 等）。仅覆盖
-  // 无法消除它们，故从空对象起按白名单重建一份干净的头。
+  // （Content-Length: 0、Cache-Control、DNT、Pragma 等）。仅覆盖无法消除它们，
+  // 故从空对象起按白名单重建一份干净的头。
   // Upgrade-Insecure-Requests 是 Safari 顶层导航必发的头，进白名单（值由 SAFARI_NAV_HEADERS
   // 强制为 '1'）。切勿把它当 App 特征头删掉 —— 删除会让 fetch metadata 头集合矛盾。
+  // Connection 进白名单并由 SAFARI_NAV_HEADERS 强制为 'keep-alive'：Safari 在 HTTP/1.1
+  // 下固定发该头，缺失是「不像 Safari」的破绽；同时避免透传 App 注入的 Connection: close。
   // 必须保留 Referer/Origin：它们是 Sec-Fetch-Site 的派生依据；丢掉后所有请求
   // 都退化成 none，翻页便会 403。Sec-Fetch-Site 不进白名单（由派生覆盖，见上）。
   // 大小写不敏感匹配；未列出的头（含未知自定义头）一律丢弃。
+  // 头顺序不由白名单决定（白名单仅控制「留/删」），顺序见 HEADER_ORDER。
   HEADER_WHITELIST: [
     'host',
     'cookie',
@@ -62,6 +97,7 @@ CF.CONFIG = {
     'accept-language',
     'accept-encoding',
     'upgrade-insecure-requests',
+    'connection',
     'referer',
     'origin',
     'sec-fetch-dest',
@@ -206,6 +242,67 @@ CF.mergeClearance = function (cookieHeader, value) {
   return base + '; cf_clearance=' + value;
 };
 
+// 从 Cookie header 剔除黑名单 name 的键值对（大小写不敏感）。
+// 支持精确匹配（COOKIE_BLACKLIST）和前缀匹配（COOKIE_PREFIX_BLACKLIST）：
+// _ym_isad 是直接 bot 标记，精确删；_ym_* 整个家族用前缀删（_ym_uid/_ym_visiac/
+// _ym_fa/...会随时间扩容，前缀覆盖比逐个列举稳，避免漏新 _ym_xx 标记）。
+// 剔除后整段 trim，多余的 `; ` 会被压平；空串进空串出。CF 只认 cf_clearance，
+// 清这些不影响过盾，反而让身份更干净。
+CF.scrubCookie = function (cookieHeader) {
+  if (!cookieHeader || typeof cookieHeader !== 'string') return cookieHeader || '';
+  var blacklist = CF.CONFIG.COOKIE_BLACKLIST;
+  var prefixes = CF.CONFIG.COOKIE_PREFIX_BLACKLIST;
+  var kept = [];
+  var parts = cookieHeader.split(';');
+  for (var i = 0; i < parts.length; i++) {
+    var seg = parts[i].trim();
+    if (!seg) continue;
+    var eq = seg.indexOf('=');
+    var name = eq >= 0 ? seg.slice(0, eq) : seg;
+    var lname = name.toLowerCase();
+    // 精确黑名单
+    if (blacklist.indexOf(lname) >= 0) continue;
+    // 前缀黑名单
+    var hitPrefix = false;
+    for (var p = 0; p < prefixes.length; p++) {
+      if (lname.length >= prefixes[p].length &&
+          lname.slice(0, prefixes[p].length) === prefixes[p]) {
+        hitPrefix = true;
+        break;
+      }
+    }
+    if (hitPrefix) continue;
+    kept.push(seg);
+  }
+  return kept.join('; ');
+};
+
+// 按 HEADER_ORDER 重排 headers 的 key 顺序（返回新对象，原对象不动）。
+// JA4_H / HTTP2 指纹校验 header 的原始顺序：dict 传头时 Host 易跑到末尾、
+// Sec-Fetch-* 散落开头，是脚本特征。此函数按 Safari canonical 顺序输出新对象。
+// 未列出的头（未知自定义头）按原顺序追加到末尾，保守保留不丢。
+CF.orderHeaders = function (headers) {
+  if (!headers) return {};
+  var order = CF.CONFIG.HEADER_ORDER;
+  var lowerOrder = {};
+  for (var i = 0; i < order.length; i++) lowerOrder[order[i].toLowerCase()] = i;
+  // 按入站 key 的小写形式排序：在 order 表里的按 index 升序，不在的统一排在后面
+  // （stable：保留原出现顺序）。
+  var keys = Object.keys(headers);
+  var indexed = [];
+  for (var k = 0; k < keys.length; k++) {
+    var lk = keys[k].toLowerCase();
+    indexed.push({ key: keys[k], idx: (lk in lowerOrder) ? lowerOrder[lk] : order.length });
+  }
+  indexed.sort(function (a, b) {
+    if (a.idx !== b.idx) return a.idx - b.idx;
+    return 0;  // stable：同 idx（含都在末段）保持原顺序
+  });
+  var out = {};
+  for (var j = 0; j < indexed.length; j++) out[indexed[j].key] = headers[indexed[j].key];
+  return out;
+};
+
 // ============ Challenge 检测 ============
 
 // challenge 单条件判定：状态码 ∈ {403,503} 即判为 challenge。
@@ -288,6 +385,95 @@ CF.notify = function (subtitle, content, attach) {
 
 // ============ 请求分支：学习 + 注入 ============
 
+// 构建一份「干净的 Safari 导航」请求头。仅注入分支使用 —— 针对第三方 App 的脏请求，
+// 消除其脚本特征（Content-Length:0、乱序、Connection: close、_ym_* bot 标记等）。
+// 学习分支处理的 Safari 请求本身是浏览器真实构造的、合法的、能过盾的，不走此函数，
+// 纯透传 —— 脚本拿固定值覆盖真实 Safari 头反而画蛇添足，可能把真头改成「更像伪造」。
+//
+// 处理顺序（顺序很重要，后置步骤依赖前置结果）：
+//   1. 白名单重建：从空对象起只保留浏览器导航该有的头（消除 App 库特征头）
+//   2. Cookie / UA 覆盖：用缓存值（含过盾 cf_clearance + 过盾 UA）
+//   3. 强制 Safari 导航标准头（Accept/Encoding/Connection/UIR/Sec-Fetch-Dest/Mode/Priority）
+//   4. Sec-Fetch-Site 按入站 Referer/Origin 派生（不是钉死 none）
+//   5. Referer 按 Safari 默认 strict-origin-when-cross-origin 裁剪
+//   6. 按 HEADER_ORDER 重排（对齐 JA4_H / HTTP2 指纹）
+//
+// req: $request 对象（取 url/headers）。
+// overrides: {cookie, ua} —— 注入分支用缓存值覆盖 Cookie/UA，让 CF 看到过盾时的身份。
+// 返回清理+重排后的 headers 对象。
+CF.buildCleanHeaders = function (req, overrides) {
+  var headers = (req && req.headers) || {};
+  overrides = overrides || {};
+
+  // 1. 白名单重建：只保留浏览器导航该有的头，消除 App/HTTP 库注入的非浏览器特征头
+  //    （Content-Length: 0、Cache-Control、DNT、Pragma、X-Requested-With 等）。
+  //    仅覆盖无法删除它们，故从空对象起按白名单重建一份干净的头。
+  //    白名单刻意保留 Referer/Origin —— 它们是 Sec-Fetch-Site 的派生依据（见下）。
+  var newHeaders = {};
+  var whitelist = CF.CONFIG.HEADER_WHITELIST;
+  var srcKeys = Object.keys(headers);
+  for (var i = 0; i < srcKeys.length; i++) {
+    var key = srcKeys[i];
+    if (whitelist.indexOf(key.toLowerCase()) >= 0) {
+      newHeaders[key] = headers[key];
+    }
+  }
+
+  // 2. Cookie / UA 覆盖为缓存值。Cookie 走 scrubCookie 剔除 _ym_isad 等 bot 标记。
+  if (overrides.cookie !== undefined) {
+    newHeaders['Cookie'] = CF.scrubCookie(overrides.cookie);
+  }
+  if (overrides.ua !== undefined) {
+    newHeaders['User-Agent'] = overrides.ua;
+  }
+
+  // 3. 强制覆盖 Safari 导航标准 header（覆盖掉 App 原带的非 Safari 值）
+  var navHeaders = CF.CONFIG.SAFARI_NAV_HEADERS;
+  var navKeys = Object.keys(navHeaders);
+  for (var j = 0; j < navKeys.length; j++) {
+    newHeaders[navKeys[j]] = navHeaders[navKeys[j]];
+  }
+
+  // 4. Sec-Fetch-Site 按入站 Referer/Origin 派生，对齐真实浏览器行为：
+  //    翻页（同站跳转）发 same-origin + Referer；地址栏直接打开发 none + 无 Referer。
+  //    旧实现把 Site 钉死 none，导致翻页「声称无来源却访问分页」被 CF 判异常 → 403。
+  var targetHost = CF.hostFromUrl(req.url);
+  newHeaders['Sec-Fetch-Site'] = CF.deriveSecFetchSite(
+    CF.getHeaderCI(newHeaders, 'Referer'),
+    CF.getHeaderCI(newHeaders, 'Origin'),
+    targetHost
+  );
+
+  // 5. Referer 策略裁剪（对齐 Safari 默认 strict-origin-when-cross-origin）：
+  //    直接透传 App 传入的完整跨源 URL 会暴露「不像 Safari」—— 真实浏览器跨源只发 origin。
+  //      同源 → 保留完整 URL（去 fragment）
+  //      跨源 → 裁到 origin
+  //      降级（https→http）→ 删除 Referer 头
+  //    Sec-Fetch-Site 用裁剪前的原始 Referer 派生（它判定的是「源 host」，裁剪不影响）。
+  var refKey = null;
+  var refVal = '';
+  var allKeys = Object.keys(newHeaders);
+  for (var ri = 0; ri < allKeys.length; ri++) {
+    if (allKeys[ri].toLowerCase() === 'referer') {
+      refKey = allKeys[ri];
+      refVal = newHeaders[refKey];
+      break;
+    }
+  }
+  if (refKey !== null) {
+    var sanitized = CF.sanitizeReferer(refVal, req.url);
+    if (sanitized.send) {
+      newHeaders[refKey] = sanitized.value;
+    } else {
+      delete newHeaders[refKey];  // 降级：不发 Referer
+    }
+  }
+
+  // 6. 按 Safari canonical 顺序重排（对齐 JA4_H / HTTP2 指纹）。
+  //    必须放在所有增删之后，否则顺序又会乱。
+  return CF.orderHeaders(newHeaders);
+};
+
 // domain 为归一化主域（eTLD+1），存储 key 基于它。
 CF.handleRequest = function (domain) {
   var req = $request;
@@ -315,7 +501,11 @@ CF.handleRequest = function (domain) {
       prev.savedAt = Date.now();
       CF.saveCookie(domain, prev);
     }
-    $done({});  // 透传，不改请求
+    // 纯透传：真 Safari 过盾请求的头是浏览器真实构造的、合法的、能过盾的。
+    // 脚本拿固定值去覆盖反而画蛇添足，可能把真实头改成「更像伪造」。
+    // 头清理（删 Content-Length:0、scrub cookie 等）只由注入分支负责，针对第三方
+    // App 的脏请求；学习分支处理的 Safari 请求本身干净，无需脚本干预。
+    $done({});
     return;
   }
 
@@ -339,64 +529,15 @@ CF.handleRequest = function (domain) {
     return;
   }
 
-  // 白名单重建：只保留浏览器导航该有的头，消除 App/HTTP 库注入的非浏览器特征头。
-  // 原生 Safari 导航是「干净」的；App 库会塞入 Connection: close、Content-Length: 0、
-  // Cache-Control、Upgrade-Insecure-Requests、DNT、Pragma 等。仅覆盖无法删除它们，
-  // 故从空对象起，按白名单重建一份干净的 Safari 导航头。
-  // 白名单刻意保留 Referer/Origin —— 它们是 Sec-Fetch-Site 的派生依据（见下）。
-  var newHeaders = {};
-  var whitelist = CF.CONFIG.HEADER_WHITELIST;
-  var srcKeys = Object.keys(headers);
-  for (var i = 0; i < srcKeys.length; i++) {
-    var key = srcKeys[i];
-    if (whitelist.indexOf(key.toLowerCase()) >= 0) {
-      newHeaders[key] = headers[key];
-    }
-  }
-  // Cookie 全量覆盖为缓存值（含 cf_clearance + 过盾时的其他 cookie）
-  newHeaders['Cookie'] = cached.cookies || ('cf_clearance=' + cached.cf_clearance);
-  // UA 用过盾时的 Safari UA 覆盖（cf_clearance 绑定过盾 UA）
-  newHeaders['User-Agent'] = cached.ua || uaHeader;
-  // 强制覆盖 Safari 导航标准 header（覆盖掉 App 原带的非 Safari 值）
-  var navHeaders = CF.CONFIG.SAFARI_NAV_HEADERS;
-  var navKeys = Object.keys(navHeaders);
-  for (var j = 0; j < navKeys.length; j++) {
-    newHeaders[navKeys[j]] = navHeaders[navKeys[j]];
-  }
-  // Sec-Fetch-Site 按入站 Referer/Origin 派生，对齐真实浏览器行为：
-  // 翻页（同站跳转）发 same-origin + Referer；地址栏直接打开发 none + 无 Referer。
-  // 旧实现把 Site 钉死 none，导致翻页「声称无来源却访问分页」被 CF 判异常 → 403。
-  var targetHost = CF.hostFromUrl(req.url);
-  newHeaders['Sec-Fetch-Site'] = CF.deriveSecFetchSite(
-    CF.getHeaderCI(newHeaders, 'Referer'),
-    CF.getHeaderCI(newHeaders, 'Origin'),
-    targetHost
-  );
-  // Referer 策略裁剪（对齐 Safari 默认 strict-origin-when-cross-origin）：
-  // 直接透传 App 传入的完整跨源 URL 会暴露「不像 Safari」—— 真实浏览器跨源只发 origin。
-  //   同源 → 保留完整 URL（去 fragment）
-  //   跨源 → 裁到 origin
-  //   降级（https→http）→ 删除 Referer 头
-  // Sec-Fetch-Site 用裁剪前的原始 Referer 派生（它判定的是「源 host」，裁剪不影响）。
-  var refKey = null;
-  var refVal = '';
-  var allKeys = Object.keys(newHeaders);
-  for (var ri = 0; ri < allKeys.length; ri++) {
-    if (allKeys[ri].toLowerCase() === 'referer') {
-      refKey = allKeys[ri];
-      refVal = newHeaders[refKey];
-      break;
-    }
-  }
-  if (refKey !== null) {
-    var sanitized = CF.sanitizeReferer(refVal, req.url);
-    if (sanitized.send) {
-      newHeaders[refKey] = sanitized.value;
-    } else {
-      delete newHeaders[refKey];  // 降级：不发 Referer
-    }
-  }
-  $done({ headers: newHeaders });
+  // 注入分支：无 cf_clearance → 用缓存 cookie（含 cf_clearance）+ 缓存 UA 重建头。
+  // 头清理逻辑（白名单/nav/派生/裁剪/order/scrub）由 CF.buildCleanHeaders 统一处理，
+  // 与学习分支共用，确保两个分支输出的头都是干净的 Safari 导航头。
+  // 此分支通过 overrides 把 Cookie/UA 覆盖成缓存值，让 CF 看到过盾时的身份。
+  var injectHeaders = CF.buildCleanHeaders(req, {
+    cookie: cached.cookies || ('cf_clearance=' + cached.cf_clearance),
+    ua: cached.ua || uaHeader
+  });
+  $done({ headers: injectHeaders });
 };
 
 // ============ 响应分支：失效检测 ============
@@ -500,6 +641,15 @@ CF.selfTest = function () {
   });
   check('mergeClearance 覆盖旧值', function () {
     CF_assert(CF.mergeClearance('cf_clearance=OLD; k=v', 'NEW') === 'k=v; cf_clearance=NEW');
+  });
+  check('scrubCookie 剔除 _ym_isad', function () {
+    CF_assert(CF.scrubCookie('a=1; _ym_isad=1; b=2') === 'a=1; b=2');
+  });
+  check('scrubCookie 前缀剔除所有 _ym_*', function () {
+    CF_assert(CF.scrubCookie('a=1; _ym_fa=x; _ym_uid=y; b=2') === 'a=1; b=2');
+  });
+  check('scrubCookie 无黑名单项原样返回', function () {
+    CF_assert(CF.scrubCookie('a=1; b=2') === 'a=1; b=2');
   });
 
   var passed = results.every(function (r) { return r.ok; });
