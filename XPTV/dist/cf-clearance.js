@@ -79,8 +79,10 @@ CF.CONFIG = {
   COOKIE_PREFIX_BLACKLIST: ['_ym_'],
   // 注入分支白名单：仅保留这些请求头，其余 App/HTTP 库特征头一律删除。
   // 真实 Safari 导航请求是「干净」的；App HTTP 库会注入大量非浏览器特征头
-  // （Content-Length: 0、Cache-Control、DNT、Pragma 等）。仅覆盖无法消除它们，
-  // 故从空对象起按白名单重建一份干净的头。
+  // （Content-Length: 0、Cache-Control、DNT、Pragma、X-Requested-With 等）。
+  // 仅覆盖无法消除它们，故从空对象起按白名单重建一份干净的头。
+  // 注：X-Requested-With 默认要删，但已列入白名单（见 HEADER_WHITELIST 末尾）——
+  // 仅在目标站后端依赖该头路由时才保留，否则应在白名单中去掉。
   // Upgrade-Insecure-Requests 是 Safari 顶层导航必发的头，进白名单（值由 SAFARI_NAV_HEADERS
   // 强制为 '1'）。切勿把它当 App 特征头删掉 —— 删除会让 fetch metadata 头集合矛盾。
   // Connection 进白名单并由 SAFARI_NAV_HEADERS 强制为 'keep-alive'：Safari 在 HTTP/1.1
@@ -103,7 +105,12 @@ CF.CONFIG = {
     'sec-fetch-dest',
     'sec-fetch-mode',
     'sec-fetch-site',
-    'priority'
+    'priority',
+    // X-Requested-With 特例保留（按入站原值透传，不强制覆盖）：
+    // 它本是 AJAX 特征头，真实 Safari 顶层导航不发 —— 保留会让「自称 navigate」的伪装
+    // 带上 AJAX 指纹，与删 Sec-Fetch-User 的理由相反权衡。仅在目标站后端按该头路由
+    // （删掉则 400/拒绝）时启用；无需时可整行删除。
+    'x-requested-with'
   ],
   // UA 兜底（$loon 取不到系统版本时）
   FALLBACK_UA_VERSION: '17_0',
@@ -406,9 +413,10 @@ CF.buildCleanHeaders = function (req, overrides) {
   overrides = overrides || {};
 
   // 1. 白名单重建：只保留浏览器导航该有的头，消除 App/HTTP 库注入的非浏览器特征头
-  //    （Content-Length: 0、Cache-Control、DNT、Pragma、X-Requested-With 等）。
-  //    仅覆盖无法删除它们，故从空对象起按白名单重建一份干净的头。
+  //    （Content-Length: 0、Cache-Control、DNT、Pragma 等）。仅覆盖无法消除它们，
+  //    故从空对象起按白名单重建一份干净的头。
   //    白名单刻意保留 Referer/Origin —— 它们是 Sec-Fetch-Site 的派生依据（见下）。
+  //    X-Requested-With 已列入白名单（特例保留，按入站原值透传），其余 App 特征头照删。
   var newHeaders = {};
   var whitelist = CF.CONFIG.HEADER_WHITELIST;
   var srcKeys = Object.keys(headers);
